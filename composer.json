@@ -12,6 +12,7 @@
 	],
 	"require": {
 		"composer/installers": "~1.0",
+		"fuelphp/v1core" : "dev-master as 1.9.0",
 		"phpseclib/phpseclib": "^2.0.0",
 		"paragonie/sodium_compat": "^1.6",
 		"monolog/monolog": "1.18.*",

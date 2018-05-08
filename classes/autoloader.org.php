@@ -23,11 +23,6 @@ namespace Fuel\Core;
 class Autoloader
 {
 	/**
-	 * @var  object  $composer  holds the composer autoloader
-	 */
-	protected static $composer;
-
-	/**
 	 * @var  array  $classes  holds all the classes and paths
 	 */
 	protected static $classes = array();
@@ -36,6 +31,14 @@ class Autoloader
 	 * @var  array  holds all the namespace paths
 	 */
 	protected static $namespaces = array();
+
+	/**
+	 * Holds all the PSR-0 compliant namespaces.  These namespaces should
+	 * be loaded according to the PSR-0 standard.
+	 *
+	 * @var  array
+	 */
+	protected static $psr_namespaces = array();
 
 	/**
 	 * @var  array  list off namespaces of which classes will be aliased to global namespace
@@ -63,9 +66,13 @@ class Autoloader
 	 * @param   bool    $psr        whether this is a PSR-0 compliant class
 	 * @return  void
 	 */
-	public static function add_namespace($namespace, $path)
+	public static function add_namespace($namespace, $path, $psr = false)
 	{
 		static::$namespaces[$namespace] = $path;
+		if ($psr)
+		{
+			static::$psr_namespaces[$namespace] = $path;
+		}
 	}
 
 	/**
@@ -113,7 +120,7 @@ class Autoloader
 	 */
 	public static function add_class($class, $path)
 	{
-		static::$classes[$class] = $path;
+		static::$classes[static::lower($class)] = $path;
 	}
 
 	/**
@@ -126,7 +133,7 @@ class Autoloader
 	{
 		foreach ($classes as $class => $path)
 		{
-			static::$classes[$class] = $path;
+			static::$classes[static::lower($class)] = $path;
 		}
 	}
 
@@ -157,29 +164,26 @@ class Autoloader
 	 */
 	public static function register()
 	{
-		if ( ! static::$composer)
-		{
-			// define our v1 autoloader first
-			spl_autoload_register('Autoloader::load', true, true);
-
-			// load the Composer autoloader if present
-			defined('VENDORPATH') or define('VENDORPATH', realpath(COREPATH.'..'.DS.'vendor').DS);
-			if ( ! is_file(VENDORPATH.'autoload.php'))
-			{
-				die('Composer is not installed. Please run "php composer.phar update" in the root to install Composer');
-			}
-			static::$composer = require(VENDORPATH.'autoload.php');
-		}
+		spl_autoload_register('Autoloader::load', true, true);
 	}
 
 	/**
-	 * Return the composer autoloader instance
+	 * Returns the class with namespace prefix when available
 	 *
-	 * @return	object
+	 * @param   string       $class
+	 * @return  bool|string
 	 */
-	public static function composer()
+	protected static function find_core_class($class)
 	{
-		return static::$composer;
+		foreach (static::$core_namespaces as $ns)
+		{
+			if (array_key_exists(static::lower($ns_class = $ns.'\\'.$class), static::$classes))
+			{
+				return $ns_class;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -227,86 +231,68 @@ class Autoloader
 			static::$auto_initialize = $class;
 		}
 
-		// check first if it is a registered class
-		if (isset(static::$classes[$class]))
+		if (isset(static::$classes[static::lower($class)]))
 		{
-			$file = str_replace('/', DS, static::$classes[$class]);
+			$file = str_replace('/', DS, static::$classes[static::lower($class)]);
 			if (is_file($file))
 			{
 				include $file;
-				static::init_class($class);
 				$loaded = true;
 			}
+			$loaded and static::init_class($class);
 		}
-
-		// check next if it's a known namespace, and we know where they live
-		if ( ! $loaded and $full_ns = substr($class, 0, $pos))
+		elseif ($full_class = static::find_core_class($class))
 		{
-			foreach (static::$namespaces as $ns => $path)
+			if ( ! class_exists($full_class, false) and ! interface_exists($full_class, false))
 			{
-				$ns = ltrim($ns, '\\');
-				if (stripos($full_ns, $ns) === 0)
+				$file = static::prep_path(static::$classes[static::lower($full_class)]);
+				if ($file and is_file($file))
 				{
-					$path .= static::class_to_path(
-						substr($class, strlen($ns) + 1)
-					);
-					if (is_file($path))
+					include $file;
+					$loaded = true;
+				}
+			}
+			if ( ! class_exists($class, false))
+			{
+				class_alias($full_class, $class);
+			}
+			$loaded and static::init_class($class);
+		}
+		else
+		{
+			$full_ns = substr($class, 0, $pos);
+
+			if ($full_ns)
+			{
+				foreach (static::$namespaces as $ns => $path)
+				{
+					$ns = ltrim($ns, '\\');
+					if (stripos($full_ns, $ns) === 0)
 					{
-						include $path;
-						static::init_class($class);
-						$loaded = true;
-						break;
-					}
-					elseif (is_file($path = strtolower($path)))
-					{
-						include $path;
-						static::init_class($class);
-						$loaded = true;
-						logger(\Fuel::L_WARNING, "File $path does not conform to PSR-4 naming!");
+						$path .= static::class_to_path(
+							substr($class, strlen($ns) + 1),
+							array_key_exists($ns, static::$psr_namespaces)
+						);
+						if (is_file($path))
+						{
+							include $path;
+							static::init_class($class);
+							$loaded = true;
+							break;
+						}
 					}
 				}
 			}
-		}
 
-		// still not found? could be defined in the app
-		if ( ! $loaded)
-		{
-			$path = APPPATH.'classes'.DS.static::class_to_path($class);
+			if ( ! $loaded)
+			{
+				$path = APPPATH.'classes'.DS.static::class_to_path($class);
 
-			// fallback to lowercase files, for BC reasons
-			if (is_file($path))
-			{
-				include $path;
-				static::init_class($class);
-				$loaded = true;
-			}
-			elseif (is_file($path = strtolower($path)))
-			{
-				include $path;
-				static::init_class($class);
-				$loaded = true;
-				logger(\Fuel::L_WARNING, "File $path does not conform to PSR-4 naming!");
-			}
-		}
-
-		// last chance, could be a core class
-		if ( ! $loaded and ! $full_ns)
-		{
-			foreach (static::$core_namespaces as $ns)
-			{
-				$full_class = $ns.'\\'.$class;
-				if (class_exists($full_class))
+				if (is_file($path))
 				{
-					class_alias($full_class, $class);
+					include $path;
 					static::init_class($class);
 					$loaded = true;
-					break;
-				}
-				elseif (interface_exists($full_class) or trait_exists($full_class))
-				{
-					class_alias($full_class, $class);
-					$loaded = true;
-					break;
 				}
 			}
 		}
@@ -316,7 +302,6 @@ class Autoloader
 		{
 			static::$auto_initialize = null;
 		}
-
 		return $loaded;
 	}
 
@@ -333,17 +318,18 @@ class Autoloader
 	}
 
 	/**
-	 * Takes a class name and turns it into a path according to the
-	 * PSR-4 standard
+	 * Takes a class name and turns it into a path.  It follows the PSR-0
+	 * standard, except for makes the entire path lower case, unless you
+	 * tell it otherwise.
 	 *
 	 * Note: This does not check if the file exists...just gets the path
 	 *
 	 * @param   string  $class  Class name
+	 * @param   bool    $psr    Whether this is a PSR-0 compliant class
 	 * @return  string  Path for the class
 	 */
-	protected static function class_to_path($class)
+	protected static function class_to_path($class, $psr = false)
 	{
-		// convert the classname to a filename
 		$file  = '';
 		if ($last_ns_pos = strripos($class, '\\'))
 		{
@@ -351,9 +337,12 @@ class Autoloader
 			$class = substr($class, $last_ns_pos + 1);
 			$file = str_replace('\\', DS, $namespace).DS;
 		}
-
-		// if the old Fuel standard, underscores indicate a directory seperator
 		$file .= str_replace('_', DS, $class).'.php';
+
+		if ( ! $psr)
+		{
+			$file = static::lower($file);
+		}
 
 		return $file;
 	}
@@ -406,9 +395,29 @@ class Autoloader
 		}
 
 		// else something went wrong somewhere, barf and exit now
+		elseif ($file)
+		{
+			throw new \Exception('File "'.\Fuel::clean_path($file).'" does not contain class "'.$class.'"');
+		}
 		else
 		{
 			throw new \FuelException('Class "'.$class.'" is not defined');
 		}
+	}
+
+	/**
+	 * deal with multibyte strings depending on the configuration
+	 * (copy of Str::lower(), but external dependancies don't work in this class)
+	 *
+	 * @param   string  $str	string to convert to lowercase
+	 * @return  string  converted string
+	 */
+	protected static function lower($str)
+	{
+		$encoding = class_exists('Fuel', false) ? \Fuel::$encoding : 'UTF-8';
+
+		return MBSTRING
+			? mb_strtolower($str, $encoding)
+			: strtolower($str);
 	}
 }
