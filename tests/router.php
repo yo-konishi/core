@@ -62,7 +62,8 @@ class Test_Router extends TestCase
             array(
                 'api/app/version',
                 'Controller\\Api\\App',
-                'version', function ($class) {
+                'version',
+                function ($class) {
                     return $class === 'Controller\\Api\\App';
                 },
                 function () {

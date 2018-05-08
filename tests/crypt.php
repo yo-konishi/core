@@ -38,15 +38,11 @@ class Test_Crypt extends TestCase
 		\Config::set('crypt.legacy.crypto_iv',   'PuMQGc0vA-ykX_QShEKRg3B4');
 		\Config::set('crypt.legacy.crypto_hmac', 'Pfk4CY2qc_okomcUH8MuIG1M');
 		\Config::set('crypt.sodium.cipherkey',   'e9fb7405ce10a96c76a9d279d5260ce4cb9ceca8774beec90da6f61d8bd2b8af');
-
-		// init the crypt class
-		\Crypt::_init();
 	}
 
 	public static function tearDownAfterClass()
 	{
 		\Config::set('crypt', static::$config_backup);
-		\Crypt::_init();
 	}
 
 	public function test_legacy_decode()
